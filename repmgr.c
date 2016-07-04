@@ -5069,6 +5069,7 @@ write_primary_conninfo(char *line, PGconn *primary_conn)
 	PQconninfoOption *connOptions;
 	PQconninfoOption *option;
 	PQExpBufferData conninfo_buf;
+	bool application_name_provided = false;
 
 	connOptions = PQconninfo(primary_conn);
 
@@ -5076,60 +5077,31 @@ write_primary_conninfo(char *line, PGconn *primary_conn)
 
 	for (option = connOptions; option && option->keyword; option++)
 	{
-		if((option->val == NULL) ||
-		   (option->val != NULL && option->val[0] == '\0'))
+		/*
+		 * Skip empty settings and ones which don't make any sense in
+		 * recovery.conf
+		 */
+		if (strcmp(option->keyword, "dbname") == 0 ||
+		    strcmp(option->keyword, "replication") == 0 ||
+		    (option->val == NULL) ||
+		    (option->val != NULL && option->val[0] == '\0'))
 			continue;
 
 		if (conninfo_buf.len != 0)
 			appendPQExpBufferChar(&conninfo_buf, ' ');
 
+		if (strcmp(option->keyword, "application_name") == 0)
+			application_name_provided = true;
+
 		/* XXX escape option->val */
 		appendPQExpBuffer(&conninfo_buf, "%s=%s", option->keyword, option->val);
 	}
 
-	// XXX append port if not set!
+	/* `application_name` not provided - default to repmgr node name */
+	if (application_name_provided == false)
+		appendPQExpBuffer(&conninfo_buf, "application_name=%s", options.node_name);
 
 	maxlen_snprintf(line, "primary_conninfo = '%s'\n", conninfo_buf.data);
-
-/*	char		host_buf[MAXLEN] = "";
-	char		conn_buf[MAXLEN] = "";
-	char		user_buf[MAXLEN] = "";
-	char		appname_buf[MAXLEN] = "";
-	char		password_buf[MAXLEN] = "";
-*/
-
-	/* Environment variable for password (UGLY, please use .pgpass!) */
-	//const char *password = getenv("PGPASSWORD");
-
-/*
-	if (password != NULL)
-	{
-		maxlen_snprintf(password_buf, " password=%s", password);
-	}
-
-	if (runtime_options.host[0])
-	{
-		maxlen_snprintf(host_buf, " host=%s", runtime_options.host);
-	}
-
-	if (runtime_options.username[0])
-	{
-		maxlen_snprintf(user_buf, " user=%s", runtime_options.username);
-	}
-
-	if (options.node_name[0])
-	{
-		maxlen_snprintf(appname_buf, " application_name=%s", options.node_name);
-	}
-
-	maxlen_snprintf(conn_buf, "port=%s%s%s%s%s",
-	   (runtime_options.masterport[0]) ? runtime_options.masterport : DEF_PGPORT_STR,
-					host_buf, user_buf, password_buf,
-					appname_buf);
-
-	maxlen_snprintf(line, "primary_conninfo = '%s'\n", conn_buf);
-*/
-
 }
 
 
