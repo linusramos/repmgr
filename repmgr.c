@@ -202,7 +202,9 @@ main(int argc, char **argv)
 	bool 		check_upstream_config = false;
 	bool 		config_file_parsed = false;
 	char 	   *ptr = NULL;
-	const char *env;
+
+	PQconninfoOption *defs = NULL;
+	PQconninfoOption *def;
 
 	set_progname(argv[0]);
 
@@ -219,6 +221,39 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
+	/*
+	 * Set default values for any parameters not provided
+	 */
+
+	defs = PQconndefaults();
+	for (def = defs; def->keyword; def++)
+	{
+		if (strcmp(def->keyword, "host") == 0 &&
+			(def->val != NULL && def->val[0] != '\0'))
+		{
+			strncpy(runtime_options.host, def->val, MAXLEN);
+		}
+		else if (strcmp(def->keyword, "hostaddr") == 0 &&
+			(def->val != NULL && def->val[0] != '\0'))
+		{
+			strncpy(runtime_options.host, def->val, MAXLEN);
+		}
+		else if (strcmp(def->keyword, "port") == 0 &&
+				 (def->val != NULL && def->val[0] != '\0'))
+		{
+			strncpy(runtime_options.masterport, def->val, MAXLEN);
+		}
+		else if (strcmp(def->keyword, "dbname") == 0 &&
+				 (def->val != NULL && def->val[0] != '\0'))
+		{
+			strncpy(runtime_options.dbname, def->val, MAXLEN);
+		}
+		else if (strcmp(def->keyword, "user") == 0 &&
+				 (def->val != NULL && def->val[0] != '\0'))
+		{
+			strncpy(runtime_options.username, def->val, MAXLEN);
+		}
+	}
 
 	/* Prevent getopt_long() from printing an error message */
 	opterr = 0;
@@ -433,24 +468,30 @@ main(int argc, char **argv)
 			termPQExpBuffer(&conninfo_error);
 			free(errmsg);
 		}
+
 		else
 		{
 			/*
-			 * Set runtime_options.(port|username) values, if provided, to prevent these
+			 * Set runtime_options.(host|port|username) values, if provided, to prevent these
 			 * being overwritten by the defaults
 			 */
 			PQconninfoOption *opt;
 			for (opt = opts; opt->keyword != NULL; opt++)
 			{
-				if (strcmp(opt->keyword, "user") == 0 &&
+				if (strcmp(opt->keyword, "host") == 0 &&
 					(opt->val != NULL && opt->val[0] != '\0'))
 				{
-					strncpy(runtime_options.username, opt->val, MAXLEN);
+					strncpy(runtime_options.host, opt->val, MAXLEN);
 				}
 				else if (strcmp(opt->keyword, "port") == 0 &&
 					(opt->val != NULL && opt->val[0] != '\0'))
 				{
 					strncpy(runtime_options.masterport, opt->val, MAXLEN);
+				}
+				else if (strcmp(opt->keyword, "user") == 0 &&
+					(opt->val != NULL && opt->val[0] != '\0'))
+				{
+					strncpy(runtime_options.username, opt->val, MAXLEN);
 				}
 			}
 		}
@@ -463,56 +504,6 @@ main(int argc, char **argv)
 	}
 
 
-	/*
-	 * Set default values for parameters not provided
-	 *
-	 * XXX use PQconndefaults() rather than extract environment variables directly
-	 */
-
-	/* set default user */
-	if (!runtime_options.username)
-	{
-		env = getenv("PGUSER");
-		if (!env)
-		{
-			struct passwd *pw = NULL;
-			pw = getpwuid(geteuid());
-			if (pw)
-			{
-				env = pw->pw_name;
-			}
-			else
-			{
-				fprintf(stderr, _("could not get current user name: %s\n"), strerror(errno));
-				exit(ERR_BAD_CONFIG);
-			}
-		}
-		strncpy(runtime_options.username, env, MAXLEN);
-	}
-
-	if (!runtime_options.dbname)
-	{
-		/* set default database */
-		env = getenv("PGDATABASE");
-		if (!env)
-		{
-			env = runtime_options.username;
-		}
-		strncpy(runtime_options.dbname, env, MAXLEN);
-	}
-
-	if (!runtime_options.masterport)
-	{
-		/* set default port */
-
-		env = getenv("PGPORT");
-		if (!env)
-		{
-			env = DEF_PGPORT_STR;
-		}
-
-		strncpy(runtime_options.masterport, env, MAXLEN);
-	}
 
 	if (check_upstream_config == true)
 	{
@@ -4227,8 +4218,6 @@ do_witness_create(void)
 static void
 do_help(void)
 {
-	const char *host;
-
 	printf(_("%s: replication management tool for PostgreSQL\n"), progname());
 	printf(_("\n"));
 	printf(_("Usage:\n"));
@@ -4248,8 +4237,7 @@ do_help(void)
 	printf(_("\n"));
 	printf(_("Connection options:\n"));
 	printf(_("  -d, --dbname=DBNAME                 database to connect to (default: \"%s\")\n"), runtime_options.dbname);
-	host = getenv("PGHOST");
-	printf(_("  -h, --host=HOSTNAME                 database server host or socket directory (default: \"%s\")\n"), host ? host : _("local socket"));
+	printf(_("  -h, --host=HOSTNAME                 database server host or socket directory (default: \"%s\")\n"), runtime_options.host[0] == '\0' ? _("local socket") : runtime_options.host);
 	printf(_("  -p, --port=PORT                     database server port (default: \"%s\")\n"), runtime_options.masterport);
 	printf(_("  -U, --username=USERNAME             database user name to connect as (default: \"%s\")\n"), runtime_options.username);
 	printf(_("\n"));
@@ -5147,8 +5135,6 @@ create_schema(PGconn *conn)
 }
 
 
-/* This function uses global variables to determine connection settings. Special
- * usage of the PGPASSWORD variable is handled, but strongly discouraged */
 static void
 write_primary_conninfo(char *line, PGconn *primary_conn)
 {
